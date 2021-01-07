@@ -1,6 +1,6 @@
 # parrots: A Simple Proxy Server
 
-Originally inspired by a MIT 6.824 Lab [assignment](https://pdos.csail.mit.edu/archive/6.824-2004/labs/webproxy1.html) and developed as an example for my [tpool](https://github.com/ahhzee/tpool.git) threadpool package, parrots is a simple web proxy that 
+Originally inspired by an MIT 6.824 Lab [assignment](https://pdos.csail.mit.edu/archive/6.824-2004/labs/webproxy1.html) and developed as an example for my [tpool](https://github.com/ahhzee/tpool.git) threadpool package, parrots is a simple web proxy that 
 
 - can handle HTTP GET requests/responses of up to 65535 bytes (or responses will be truncated to fit in)
 
