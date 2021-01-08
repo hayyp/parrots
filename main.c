@@ -94,6 +94,8 @@ int main()
 
 static void request_handler(void *arg)
 {
+    signal(SIGPIPE, SIG_IGN);
+
     char s[INET6_ADDRSTRLEN] = {0};
     int cli_fd;
     struct sockaddr_storage cli_addr;
@@ -103,7 +105,7 @@ static void request_handler(void *arg)
 
     int fd = * (int *) arg;
 
-    if (fd == listenfd) {
+    if (fd == listenfd) { // first time connection with the socket
         for (;;) {
             cli_fd = accept(fd, (struct sockaddr *) &cli_addr, &sin_size);
             if (cli_fd == -1) {
@@ -122,13 +124,13 @@ static void request_handler(void *arg)
             set_nonblock(cli_fd);
 
             ev.data.fd = cli_fd;
-            ev.events = EPOLLIN | EPOLLET;
+            ev.events = EPOLLIN | EPOLLET | EPOLLONESHOT;
 
             if (epoll_ctl(epfd, EPOLL_CTL_ADD, cli_fd, &ev) == -1) {
                 perror("EPOLL_CTL_ADD");
             }
         }
-    } else {
+    } else { // alive connections
         proxy_connect(fd);
         /*
          * TODO
@@ -143,6 +145,7 @@ static int setup_listenfd()
 {
     struct addrinfo hints, *servinfo, *servinfo_list;
     int sockfd;
+    int yes = 1;
 
     memset(&hints, 0, sizeof(hints));
     hints.ai_family = AF_UNSPEC;
@@ -159,6 +162,11 @@ static int setup_listenfd()
         if ((sockfd = socket(servinfo->ai_family, servinfo->ai_socktype, servinfo->ai_protocol)) == -1) {
             perror("socket");
             continue;
+        }
+
+        if (setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(int)) == -1) {
+            perror("setsockopt");
+            exit(EXIT_FAILURE);
         }
 
         if (bind(sockfd, servinfo->ai_addr, servinfo->ai_addrlen) == -1) {

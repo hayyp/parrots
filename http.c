@@ -9,8 +9,8 @@
 #include <stdlib.h>
 #include <unistd.h>
 #include <netdb.h>
-#include <math.h>
 
+#include "colored_text.h"
 #include "http.h"
 #include "utils.h"
 #include "rio.h"
@@ -20,12 +20,14 @@
 #define SHORTMAX 512
 
 /*
- * TODO keep client and remote server connected
+ * TODO 
+ * 1. keep client and remote server connected
+ * 2. safely close fd using unsupported protocols
+ * 3. handle multiple requests using a loop
  */
 
 static int  parse_url(char *url, char *hostname, char *rest);
 static void proxy_error(int fd, char *cause, char *errnum, char *shortmsg, char *longmsg);
-
 
 /*
  * BACKGROUND
@@ -44,6 +46,9 @@ static void proxy_error(int fd, char *cause, char *errnum, char *shortmsg, char 
  * entire request header should be terminated by a trailing CRLF, which
  * is then immediately followed by the request body.
  *
+ * The content of a HTTP request header is listed
+ *
+ * https://www.w3.org/Protocols/rfc2616/rfc2616-sec5.html
  */
 
 void proxy_connect(int fd)
@@ -61,7 +66,7 @@ void proxy_connect(int fd)
     char buf[LONGMAX];
 
     char hostname[SHORTMAX] = {0}, rest[SHORTMAX] = {0};
-    char headers[LONGMAX]; // anything following the startline
+    char saved_headers[LONGMAX] = {0}; // anything following the startline
 
     rio_readinitb(&rio, fd);
 
@@ -78,9 +83,6 @@ void proxy_connect(int fd)
             perror("rio_readlineb");
             close(fd); // TODO
         } 
-       // else {
-       //     break;
-       // }
     }
 
     sscanf(buf, "%s %s %s", method, url, version);
@@ -93,23 +95,25 @@ void proxy_connect(int fd)
     }
 
     int error = parse_url(url, hostname, rest);
-    // if (error) {
-    //     // what to do??
-    //     close(fd); // TODO
-    //     return;
-    // }
+    if (error) {  // HTTPS or unusually long hostname
+        proxy_error(fd, method, "501", "Unsupported Method", "HTTP Method Not Supported");
+        close(fd);  //TODO: will closing them affect other connections?
+        return;
+    }
     
     fprintf(stderr, "remote server address confirmed, %s\n", hostname);
 
-    while (rc = rio_readlineb(&rio, buf, LONGMAX) && rc > 0  && strcmp(buf, "\r\n")) {
-        if (!strncmp(buf, "Content-length", 14)) {
-            continue;
-        }
-        if (!strncmp(buf, "GET", 3)) {
-            break;
-        }
-        strcat(headers, buf);
-    }
+    char request_rest_buf[SHORTMAX];
+    do {
+        /* 
+         * currently we can handle one request at a time, even though it's possible for 
+         * a socket to have multiple requests waiting and the rest of the connects will
+         * have to wait for another epoll notification
+         */
+        rc = rio_readlineb(&rio, request_rest_buf, SHORTMAX);
+        if (rc < 0) break;
+        strcat(saved_headers, request_rest_buf);
+    } while (strcmp(request_rest_buf, "\r\n"));
     if (rc == -1) {
         if (errno != EAGAIN) {// neither EAGAIN nor EINTR
             /*
@@ -119,7 +123,6 @@ void proxy_connect(int fd)
              */
             perror("rio_readlineb");
             close(fd);
-            //break;
             return;
         } 
     }
@@ -139,8 +142,8 @@ void proxy_connect(int fd)
     hints.ai_socktype = SOCK_STREAM;
 
     if ((err = getaddrinfo(hostname, "80", &hints, &servlist))) {
-            fprintf(stderr, "getaddrinfo: %s\n", gai_strerror(err));
-            return;
+        fprintf(stderr, "getaddrinfo: %s\n", gai_strerror(err));
+        return;
     }
 
     for (serv = servlist; serv != NULL; serv = serv->ai_next) {
@@ -159,7 +162,8 @@ void proxy_connect(int fd)
 
     if (serv == NULL) {
         fprintf(stderr, "client, failed to connect\n");
-        return; // what to do?
+        close(fd);
+        return;
     }
 
     inet_ntop(serv->ai_family, get_in_addr((struct sockaddr *) serv->ai_addr), s, sizeof(s));
@@ -167,26 +171,21 @@ void proxy_connect(int fd)
 
     freeaddrinfo(servlist);
 
-    char forward_header[LONGMAX];
+    char forward_header[LONGMAX] = {0};
 
     // Undefined behavious may occur if the request contains a body
 
     fprintf(stderr, "target: %s\n", rest);
-    fprintf(stderr, "preserved header lines:\n%s", headers);
-    sprintf(forward_header, "GET %s HTTP/1.1\r\n", rest);
-    strcat(forward_header, headers);
-    sprintf(forward_header, "%sContent-length: %d\r\n\r\n", forward_header, (int) strlen(forward_header));
+    sprintf(forward_header, "GET %s HTTP/1.0\r\n", rest);
+    strcat(forward_header, saved_headers);
 
-    fprintf(stderr, "header generated:\n%s", forward_header);
+    fprintf(stderr, BOLDBLUE "header generated:\n%s" RESET, forward_header);
     
     rio_writen(sockfd, forward_header, strlen(forward_header));
-    fprintf(stderr, "new header written and sent\n");
-    
 
     // forward the response back to our client
 
     char response_header[LONGMAX] = {0};
-    char response_body[LLMAX] = {0};
     char response_body_lenth_c[SHORTMAX] = {0};
     int response_body_length;
 
@@ -194,7 +193,6 @@ void proxy_connect(int fd)
     struct rio_t rio_response;
     rio_readinitb(&rio_response, sockfd);
     rc = rio_readlineb(&rio_response, buf, LONGMAX);
-    fprintf(stderr, "response header: %s\n", buf);
     strcat(response_header, buf);
     while (rc = rio_readlineb(&rio_response, buf, LONGMAX) && rc > 0  && strcmp(buf, "\r\n")) {
         if (!strncasecmp(buf, "Content-length", 14)) {
@@ -204,21 +202,22 @@ void proxy_connect(int fd)
         strcat(response_header, buf);
     }
     if (rc == -1) {
-        perror("rio_readlineb");
+        perror("rio_readlineb trying to read response");
         close(fd);
         return;
     }
     strcat(response_header, "\r\n");
-    fprintf(stderr, "finished reading response header\n%s\n", response_header);
+    fprintf(stderr, BOLDCYAN "finished reading response header\n%s" RESET, response_header);
 
-    int response_size_limited = fmin(LLMAX, response_body_length);
     rio_writen(fd, response_header, strlen(response_header));
+    char *response_body_buffer = (char *) malloc(response_body_length * sizeof(char));
 
-    rc = rio_readnb(&rio_response, response_body, response_size_limited);
-    // fprintf(stderr, "response body length (actual): %d\n", rc);
+    rc = rio_readnb(&rio_response, response_body_buffer, response_body_length);
+    fprintf(stderr, "response body length (actual): %d\n", rc);
 
-    rio_writen(fd, response_body, response_body_length);
-    // fprintf(stderr, "response body is as follows: \n%s", response_body);
+    rio_writen(fd, response_body_buffer, response_body_length);
+    //fprintf(stderr, "response body is as follows: \n%s", response_body_buffer);
+    free(response_body_buffer);
     close(sockfd);
     close(fd);
 }
@@ -280,4 +279,3 @@ static int parse_url(char *url, char *hostname, char *rest)
 
     return 0;
 }
-
