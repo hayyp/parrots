@@ -2,7 +2,7 @@
 
 Originally inspired by an MIT 6.824 Lab [assignment](https://pdos.csail.mit.edu/archive/6.824-2004/labs/webproxy1.html) and developed as an example for my [tpool](https://github.com/ahhzee/tpool.git) threadpool package, parrots is a simple web proxy that 
 
-- can handle HTTP GET requests/responses ---of up to 65535 bytes (or responses will be truncated to fit in)---
+- can handle HTTP GET requests/responses ~~of up to 65535 bytes (or responses will be truncated to fit in)~~
 
 - uses `epoll` for I/O multiplexing (client-proxy only)
 
@@ -15,6 +15,10 @@ To build parrots, you simply run `make`.
 # System requirements
 
 Since parrots uses `epoll`, it runs only on Linux systems.
+
+# Test
+
+An ideal site to test this proxy server should use and only use HTTP, such as [NeverSSL](http://neverssl.com).
 
 # Todo
 
