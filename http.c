@@ -273,7 +273,7 @@ static int parse_url(char *url, char *hostname, char *rest)
         hostname_len = i - protocol_len;
         fprintf(stderr, "parser, hostname length confirmed  %d\n", hostname_len);
         strncat(hostname, url + protocol_len, hostname_len);
-        strcat(rest, url + protocol_len + hostname_len);
+        strncat(rest, url + protocol_len + hostname_len, SHORTMAX);
         fprintf(stderr, "parser: hostname confirmed %s\n", hostname);
     }
 
